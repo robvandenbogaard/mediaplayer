@@ -308,7 +308,8 @@ radioStations =
       )
     , ( "Regio / Diversen"
       , Group
-            [ ( "Radio NH", Url "http://ice.cr1.streamzilla.xlcdn.com:8000/sz%3Dnhnieuws%3DNHRadio_mp3" )
+            [ ( "ORTS", Url "https://media.maxx-xs.nl/mediaplayer/sasx.php?serps=LY1rCgMhDITvkhNo1KxmT-NqBKEFaRZKKb17ld1$3wzzyBz4q2wNQ-sPOT9DeoVdGRloW-AYxmURgyebPC0RGHSlb-7lOdzixPCWQ$t578w6GrMozoYUldfQJf28zIGy2Y6QCImSKRhRovWuYmjN5eQPZ2uRAPvvDw" )
+            , ( "Radio NH", Url "http://ice.cr1.streamzilla.xlcdn.com:8000/sz%3Dnhnieuws%3DNHRadio_mp3" )
             , ( "Radio NL Kids", Url "http://stream.radionlkids.nl/rnlkids" )
             , ( "Salto CaribbeanFM", Url "https://icecast.streamone.net/YoRFHeMSYJ42" )
             , ( "Salto Mokum Radio", Url "https://icecast.streamone.net/crJNGaeQKRQy" )
