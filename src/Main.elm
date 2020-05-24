@@ -2,65 +2,52 @@ module Main exposing (main)
 
 import Browser
 import Browser.Events
-import Browser.Navigation
+import Browser.Navigation as Navigation exposing (Key)
 import Embed.Youtube
 import Embed.Youtube.Attributes
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Json.Decode as Decode exposing (Decoder)
+import Url exposing (Url)
+import Url.Parser exposing ((</>), (<?>))
+import Url.Parser.Query
 
 
 type alias Model =
-    { mode : Mode
-    , stations : Entries
+    { entry : Entry
+    , key : Key
+    , route : List String
+    , input : String
+    , shift : Bool
     }
-
-
-type Mode
-    = Idle
-    | Radio Entries
-    | RadioPlaying Station
-    | Youtube String Keyboard
-    | YoutubePlaying String
-    | Settings
-    | Off
-
-
-type alias Entries =
-    List ( String, Entry )
 
 
 type Entry
-    = Group Entries
-    | Url String
-
-
-type alias Station =
-    { name : String
-    , url : String
-    }
-
-
-type alias Keyboard =
-    { shift : Bool }
+    = Menu String (List Entry)
+    | Radio String String
+    | Youtube String (Maybe String)
+    | Settings (List Entry)
+    | PowerOff String
 
 
 type Msg
-    = Select Mode
-    | Back
+    = Back
     | Input String
     | Key Char
-    | PowerOff
+    | UrlChanged Url
+    | LinkClicked Browser.UrlRequest
 
 
 main : Program () Model Msg
 main =
-    Browser.document
-        { init = \_ -> ( { stations = radioStations, mode = Idle }, Cmd.none )
+    Browser.application
+        { init = init
         , view = view
         , update = update
         , subscriptions = \model -> Browser.Events.onClick clickDecoder
+        , onUrlRequest = LinkClicked
+        , onUrlChange = UrlChanged
         }
 
 
@@ -77,108 +64,190 @@ clickDecoder =
             )
 
 
+init : () -> Url -> Navigation.Key -> ( Model, Cmd Msg )
+init _ url key =
+    let
+        route =
+            routeFromUrl url
+    in
+    ( { entry = entryFromRoute route
+      , key = key
+      , route = route
+      , input = ""
+      , shift = False
+      }
+    , Cmd.none
+    )
+
+
+namedEntry : Entry -> Maybe ( String, Entry )
+namedEntry e =
+    case e of
+        Menu k _ ->
+            Just ( k, e )
+
+        Radio k _ ->
+            Just ( k, e )
+
+        Youtube k _ ->
+            Just ( k, e )
+
+        PowerOff k ->
+            Just ( k, e )
+
+        _ ->
+            Nothing
+
+
+entryFromRoute : List String -> Entry
+entryFromRoute route =
+    let
+        findEntry k =
+            List.foldl
+                (\e a ->
+                    case e of
+                        Settings _ ->
+                            if k == "settings" then
+                                Just e
+
+                            else
+                                a
+
+                        _ ->
+                            case namedEntry e of
+                                Just ( k_, v ) ->
+                                    if k == k_ then
+                                        Just v
+
+                                    else
+                                        a
+
+                                _ ->
+                                    a
+                )
+                Nothing
+    in
+    List.foldr
+        (\key a ->
+            case a of
+                Menu _ entries ->
+                    case findEntry key (Debug.log "entries" entries) of
+                        Nothing ->
+                            a
+
+                        Just entry ->
+                            entry
+
+                Youtube label Nothing ->
+                    Youtube label (Just key)
+
+                _ ->
+                    a
+        )
+        menu
+        (Debug.log "route for entry" route)
+
+
+routeFromUrl : { a | query : Maybe String } -> List String
+routeFromUrl { query } =
+    case query of
+        Nothing ->
+            []
+
+        Just "" ->
+            []
+
+        Just q ->
+            String.split "/" q
+                |> List.filterMap Url.percentDecode
+                |> List.reverse
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        Select mode ->
-            ( { model | mode = mode }, Cmd.none )
+        LinkClicked (Browser.Internal url) ->
+            ( model
+            , Navigation.pushUrl model.key (Url.toString url)
+            )
+
+        LinkClicked (Browser.External url) ->
+            ( model, Navigation.load url )
+
+        UrlChanged url ->
+            let
+                route =
+                    routeFromUrl url
+            in
+            ( { model | route = route, entry = entryFromRoute route }, Cmd.none )
 
         Back ->
             let
-                mode =
-                    case model.mode of
-                        Idle ->
-                            Settings
-
-                        Radio _ ->
-                            Idle
-
-                        Settings ->
-                            Idle
-
-                        Youtube _ _ ->
-                            Idle
-
-                        YoutubePlaying _ ->
-                            Youtube "" { shift = False }
-
-                        _ ->
-                            Idle
-
                 cmd =
-                    case model.mode of
-                        RadioPlaying _ ->
-                            Browser.Navigation.reload
+                    case model.route of
+                        [] ->
+                            Navigation.pushUrl model.key "?settings"
 
                         _ ->
-                            Cmd.none
+                            let
+                                url =
+                                    "?"
+                                        ++ (List.drop 1 model.route
+                                                |> List.reverse
+                                                |> String.join "/"
+                                           )
+                            in
+                            case model.entry of
+                                Radio _ _ ->
+                                    Navigation.load url
+
+                                _ ->
+                                    Navigation.pushUrl model.key url
             in
-            ( { model | mode = mode }, cmd )
+            ( model
+            , cmd
+            )
 
         Input value ->
-            let
-                mode =
-                    case model.mode of
-                        Youtube _ keystate ->
-                            Youtube value keystate
-
-                        _ ->
-                            model.mode
-            in
-            ( { model | mode = mode }, Cmd.none )
+            ( { model | input = value }, Cmd.none )
 
         Key c ->
-            case model.mode of
-                Youtube url keystate ->
-                    case c of
-                        '<' ->
-                            ( { model | mode = Youtube (String.dropRight 1 url) keystate }, Cmd.none )
+            case c of
+                '<' ->
+                    ( { model | input = String.dropRight 1 model.input }, Cmd.none )
 
-                        '^' ->
-                            ( { model | mode = Youtube url { keystate | shift = not keystate.shift } }, Cmd.none )
-
-                        _ ->
-                            ( { model | mode = Youtube (url ++ String.fromList [ c ]) keystate }, Cmd.none )
+                '^' ->
+                    ( { model | shift = not model.shift }, Cmd.none )
 
                 _ ->
-                    ( model, Cmd.none )
-
-        PowerOff ->
-            -- Should send a request to local service for shutting down
-            ( { model | mode = Off }, Cmd.none )
+                    ( { model | input = model.input ++ String.fromList [ c ] }, Cmd.none )
 
 
 view model =
     { title =
-        case model.mode of
-            Idle ->
-                "Media player"
+        case model.entry of
+            Menu name _ ->
+                "Mediaplayer - " ++ name
 
-            Radio _ ->
-                "Radio"
-
-            RadioPlaying { name } ->
+            Radio name _ ->
                 "Radio - " ++ name
 
-            Youtube _ _ ->
-                "Youtube"
+            Youtube name _ ->
+                name
 
-            YoutubePlaying url ->
-                "Youtube - " ++ url
-
-            Settings ->
-                "Settings"
-
-            Off ->
-                "Power off"
+            _ ->
+                "Media player"
     , body = [ content model ]
     }
 
 
-link lbl msg =
-    a [ onClick msg ] [ text lbl ]
+link : String -> List String -> Html Msg
+link lbl route =
+    a [ href ("?" ++ String.join "/" (List.reverse route)) ] [ text lbl ]
 
 
-keyboard state =
+keyboard : Bool -> Html Msg
+keyboard shifted =
     let
         keys =
             [ "1234567890"
@@ -188,7 +257,7 @@ keyboard state =
             ]
 
         shift c =
-            if state.shift then
+            if shifted then
                 c
 
             else
@@ -206,155 +275,143 @@ keyboard state =
             keys
 
 
+content : Model -> Html Msg
 content model =
-    case model.mode of
-        Idle ->
-            nav []
-                [ link "Radio" <| Select (Radio model.stations)
-                , br [] []
-                , link "Youtube" <| Select (Youtube "" { shift = False })
-                ]
+    case model.entry of
+        Menu name entries ->
+            let
+                entry e =
+                    case e of
+                        Just ( n, _ ) ->
+                            [ link n (n :: model.route), br [] [] ]
 
-        Radio stations ->
-            radio stations
+                        Nothing ->
+                            []
+            in
+            nav
+                []
+                (List.concatMap (entry << namedEntry) entries)
 
-        RadioPlaying station ->
+        Settings entries ->
+            let
+                entry e =
+                    case e of
+                        Just ( n, _ ) ->
+                            [ link n (n :: model.route), br [] [] ]
+
+                        Nothing ->
+                            []
+            in
+            nav
+                []
+                (List.concatMap (entry << namedEntry) entries)
+
+        Radio name url ->
             article
                 []
-                [ text station.name
+                [ text name
                 , br [] []
-                , audio [ src station.url, autoplay True ] []
+                , audio [ src url, autoplay True ] []
                 ]
 
-        Youtube url keystate ->
+        Youtube _ maybeCode ->
+            case maybeCode of
+                Nothing ->
+                    article
+                        []
+                        [ keyboard model.shift
+                        , input [ onInput Input, placeholder "Vul Youtube code in", value model.input ] []
+                        , br [] []
+                        , link "Kijken" (model.input :: model.route)
+                        ]
+
+                Just code ->
+                    Embed.Youtube.fromString code
+                        |> Embed.Youtube.attributes
+                            [ Embed.Youtube.Attributes.width 640
+                            , Embed.Youtube.Attributes.height 400
+                            , Embed.Youtube.Attributes.autoplay
+                            , Embed.Youtube.Attributes.language "nl"
+                            , Embed.Youtube.Attributes.modestBranding
+                            ]
+                        |> Embed.Youtube.toHtml
+
+        PowerOff _ ->
             article
                 []
-                [ keyboard keystate
-                , input [ onInput Input, placeholder "Vul Youtube code in", value url ] []
-                , br [] []
-                , a [ onClick <| Select (YoutubePlaying url) ] [ text "Kijken" ]
+                [ text "-"
                 ]
 
-        YoutubePlaying url ->
-            Embed.Youtube.fromString url
-                |> Embed.Youtube.attributes
-                    [ Embed.Youtube.Attributes.width 640
-                    , Embed.Youtube.Attributes.height 400
-                    , Embed.Youtube.Attributes.autoplay
-                    , Embed.Youtube.Attributes.language "nl"
-                    , Embed.Youtube.Attributes.modestBranding
+
+menu =
+    Menu "start"
+        [ Menu "Radio"
+            [ Menu "NPO"
+                [ Radio "Radio 1" "http://icecast.omroep.nl/radio1-bb-mp3"
+                , Radio "Radio 2" "http://icecast.omroep.nl/radio2-bb-mp3"
+                , Radio "Radio 3" "http://icecast.omroep.nl/radio3-bb-mp3"
+                , Radio "Radio 4" "http://icecast.omroep.nl/radio4-bb-mp3"
+                , Radio "Radio 5" "http://icecast.omroep.nl/radio5-bb-mp3"
+                , Radio "Radio 2 Soul & Jazz" "http://icecast.omroep.nl/radio6-bb-mp3"
+                , Menu "FunX"
+                    [ Radio "FunX NL" "https://icecast.omroep.nl/funx-bb-mp3"
+                    , Radio "FunX Amsterdam" "https://icecast.omroep.nl/funx-amsterdam-bb-mp3"
+                    , Radio "FunX Rotterdam" "https://icecast.omroep.nl/funx-rotterdam-bb-mp3"
+                    , Radio "FunX Utrecht" "https://icecast.omroep.nl/funx-utrecht-bb-mp3"
+                    , Radio "FunX Den Haag" "https://icecast.omroep.nl/funx-denhaag-bb-mp3"
+                    , Radio "FunX Latin" "https://icecast.omroep.nl/funx-latin-bb-mp3"
+                    , Radio "FunX Dance" "https://icecast.omroep.nl/funx-dance-bb-mp3"
+                    , Radio "FunX Slow Jamz" "https://icecast.omroep.nl/funx-slowjamz-bb-mp3"
                     ]
-                |> Embed.Youtube.toHtml
-
-        Settings ->
-            article
-                []
-                [ a [ onClick PowerOff ] [ text "Power off" ] ]
-
-        Off ->
-            nav [] [ text "-" ]
-
-
-radio stations =
-    let
-        entry ( name, e ) =
-            case e of
-                Group entries ->
-                    [ link name <| Select (Radio entries), br [] [] ]
-
-                Url url ->
-                    [ link name <| Select (RadioPlaying { name = name, url = url }), br [] [] ]
-    in
-    nav
-        []
-        (List.concatMap entry <| stations)
-
-
-radioStations =
-    [ ( "NPO"
-      , Group
-            [ ( "Radio 1", Url "http://icecast.omroep.nl/radio1-bb-mp3" )
-            , ( "Radio 2", Url "http://icecast.omroep.nl/radio2-bb-mp3" )
-            , ( "Radio 3", Url "http://icecast.omroep.nl/radio3-bb-mp3" )
-            , ( "Radio 4", Url "http://icecast.omroep.nl/radio4-bb-mp3" )
-            , ( "Radio 5", Url "http://icecast.omroep.nl/radio5-bb-mp3" )
-            , ( "Radio 2 Soul & Jazz", Url "http://icecast.omroep.nl/radio6-bb-mp3" )
-            , ( "FunX"
-              , Group
-                    [ ( "FunX NL", Url "https://icecast.omroep.nl/funx-bb-mp3" )
-                    , ( "FunX Amsterdam", Url "https://icecast.omroep.nl/funx-amsterdam-bb-mp3" )
-                    , ( "FunX Rotterdam", Url "https://icecast.omroep.nl/funx-rotterdam-bb-mp3" )
-                    , ( "FunX Utrecht", Url "https://icecast.omroep.nl/funx-utrecht-bb-mp3" )
-                    , ( "FunX Den Haag", Url "https://icecast.omroep.nl/funx-denhaag-bb-mp3" )
-                    , ( "FunX Latin", Url "https://icecast.omroep.nl/funx-latin-bb-mp3" )
-                    , ( "FunX Dance", Url "https://icecast.omroep.nl/funx-dance-bb-mp3" )
-                    , ( "FunX Slow Jamz", Url "https://icecast.omroep.nl/funx-slowjamz-bb-mp3" )
+                ]
+            , Radio "Slam FM" "http://stream.slam.nl/slamaac"
+            , Radio "BNR Nieuwsradio" "http://icecast-bnr-cdp.triple-it.nl/bnr_mp3_96_04"
+            , Radio "Sky Radio" "http://playerservices.streamtheworld.com/api/livestream-redirect/SKYRADIO.mp3"
+            , Menu "Sublime"
+                [ Radio "Sublime Radio" "http://stream.sublimefm.nl/SublimeFM_mp3"
+                , Radio "Arrow Jazz" "http://17873.live.streamtheworld.com/SUBLIMEARROWJAZZ.mp3"
+                , Radio "Pure Jazz" "http://20863.live.streamtheworld.com/SUBLIMEPUREJAZZ.mp3"
+                , Radio "Soul" "http://20863.live.streamtheworld.com/SUBLIMESOUL.mp3"
+                , Radio "Smooth" "http://20863.live.streamtheworld.com/SUBLIMESMOOTH.mp3"
+                , Radio "Sublime 500" "http://20863.live.streamtheworld.com/SUBLIME500.mp3"
+                ]
+            , Menu "Regio / Diversen"
+                [ Radio "ORTS" "https://media.maxx-xs.nl/mediaplayer/sasx.php?serps=LY1rCgMhDITvkhNo1KxmT-NqBKEFaRZKKb17ld1$3wzzyBz4q2wNQ-sPOT9DeoVdGRloW-AYxmURgyebPC0RGHSlb-7lOdzixPCWQ$t578w6GrMozoYUldfQJf28zIGy2Y6QCImSKRhRovWuYmjN5eQPZ2uRAPvvDw"
+                , Radio "Radio NH" "http://ice.cr1.streamzilla.xlcdn.com:8000/sz%3Dnhnieuws%3DNHRadio_mp3"
+                , Radio "Radio NL Kids" "http://stream.radionlkids.nl/rnlkids"
+                , Radio "Salto CaribbeanFM" "https://icecast.streamone.net/YoRFHeMSYJ42"
+                , Radio "Salto Mokum Radio" "https://icecast.streamone.net/crJNGaeQKRQy"
+                , Radio "Radio Salto" "https://icecast.streamone.net/46ANH44CYA8S"
+                , Radio "Salto RAZO" "https://icecast.streamone.net/c6YFGcOSYMQS"
+                ]
+            , Menu "Internationaal"
+                [ Menu "Belgie"
+                    [ Radio "Radio 1" "http://icecast.vrtcdn.be/radio1-high.mp3"
+                    , Radio "Studio Brussel" "http://icecast.vrtcdn.be/stubru-high.mp3"
+                    , Radio "VRT Ketnet Hits" "http://icecast.vrtcdn.be/ketnetradio-high.mp3"
+                    , Radio "VRT Nieuws" "http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3"
                     ]
-              )
+                , Menu "Duitsland"
+                    [ Radio "WDR 4" "http://wdr-wdr4-live.icecast.wdr.de/wdr/wdr4/live/mp3/128/stream.mp3"
+                    ]
+                , Menu "Engeland"
+                    [ Radio "BBC World Service" "http://bbcwssc.ic.llnwd.net/stream/bbcwssc_mp1_ws-einws"
+                    ]
+                , Menu "Frankrijk"
+                    [ Radio "France Musique" "http://direct.francemusique.fr/live/francemusique-midfi.mp3"
+                    , Radio "FIP" "http://icecast.radiofrance.fr/fip-midfi.mp3"
+                    , Radio "FIP Monde" "http://direct.fipradio.fr/live/fip-webradio4.mp3"
+                    ]
+                , Menu "Noorwegen"
+                    [ Radio "NRK Alltid Nyheter" "http://lyd.nrk.no/nrk_radio_alltid_nyheter_mp3_h"
+                    , Radio "NRK Folkemusik" "http://lyd.nrk.no/nrk_radio_folkemusikk_mp3_h"
+                    ]
+                , Menu "Spanje"
+                    [ Radio "RTVE Radio Nacional" "https://rne.rtveradio.cires21.com/rne_hc.mp3"
+                    ]
+                ]
             ]
-      )
-    , ( "Slam FM", Url "http://stream.slam.nl/slamaac" )
-    , ( "BNR Nieuwsradio", Url "http://icecast-bnr-cdp.triple-it.nl/bnr_mp3_96_04" )
-    , ( "Sky Radio", Url "http://playerservices.streamtheworld.com/api/livestream-redirect/SKYRADIO.mp3" )
-    , ( "Sublime"
-      , Group
-            [ ( "Sublime Radio", Url "http://stream.sublimefm.nl/SublimeFM_mp3" )
-            , ( "Arrow Jazz", Url "http://17873.live.streamtheworld.com/SUBLIMEARROWJAZZ.mp3" )
-            , ( "Pure Jazz", Url "http://20863.live.streamtheworld.com/SUBLIMEPUREJAZZ.mp3" )
-            , ( "Soul", Url "http://20863.live.streamtheworld.com/SUBLIMESOUL.mp3" )
-            , ( "Smooth", Url "http://20863.live.streamtheworld.com/SUBLIMESMOOTH.mp3" )
-            , ( "Sublime 500", Url "http://20863.live.streamtheworld.com/SUBLIME500.mp3" )
-            ]
-      )
-    , ( "Regio / Diversen"
-      , Group
-            [ ( "ORTS", Url "https://media.maxx-xs.nl/mediaplayer/sasx.php?serps=LY1rCgMhDITvkhNo1KxmT-NqBKEFaRZKKb17ld1$3wzzyBz4q2wNQ-sPOT9DeoVdGRloW-AYxmURgyebPC0RGHSlb-7lOdzixPCWQ$t578w6GrMozoYUldfQJf28zIGy2Y6QCImSKRhRovWuYmjN5eQPZ2uRAPvvDw" )
-            , ( "Radio NH", Url "http://ice.cr1.streamzilla.xlcdn.com:8000/sz%3Dnhnieuws%3DNHRadio_mp3" )
-            , ( "Radio NL Kids", Url "http://stream.radionlkids.nl/rnlkids" )
-            , ( "Salto CaribbeanFM", Url "https://icecast.streamone.net/YoRFHeMSYJ42" )
-            , ( "Salto Mokum Radio", Url "https://icecast.streamone.net/crJNGaeQKRQy" )
-            , ( "Radio Salto", Url "https://icecast.streamone.net/46ANH44CYA8S" )
-            , ( "Salto RAZO", Url "https://icecast.streamone.net/c6YFGcOSYMQS" )
-            ]
-      )
-    , ( "Internationaal"
-      , Group
-            [ ( "Belgie"
-              , Group
-                    [ ( "Radio 1", Url "http://icecast.vrtcdn.be/radio1-high.mp3" )
-                    , ( "Studio Brussel", Url "http://icecast.vrtcdn.be/stubru-high.mp3" )
-                    , ( "VRT Ketnet Hits", Url "http://icecast.vrtcdn.be/ketnetradio-high.mp3" )
-                    , ( "VRT Nieuws", Url "http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3" )
-                    ]
-              )
-            , ( "Duitsland"
-              , Group
-                    [ ( "WDR 4", Url "http://wdr-wdr4-live.icecast.wdr.de/wdr/wdr4/live/mp3/128/stream.mp3" )
-                    ]
-              )
-            , ( "Engeland"
-              , Group
-                    [ ( "BBC World Service", Url "http://bbcwssc.ic.llnwd.net/stream/bbcwssc_mp1_ws-einws" )
-                    ]
-              )
-            , ( "Frankrijk"
-              , Group
-                    [ ( "France Musique", Url "http://direct.francemusique.fr/live/francemusique-midfi.mp3" )
-                    , ( "FIP", Url "http://icecast.radiofrance.fr/fip-midfi.mp3" )
-                    , ( "FIP Monde", Url "http://direct.fipradio.fr/live/fip-webradio4.mp3" )
-                    ]
-              )
-            , ( "Noorwegen"
-              , Group
-                    [ ( "NRK Alltid Nyheter", Url "http://lyd.nrk.no/nrk_radio_alltid_nyheter_mp3_h" )
-                    , ( "NRK Folkemusik", Url "http://lyd.nrk.no/nrk_radio_folkemusikk_mp3_h" )
-                    ]
-              )
-            , ( "Spanje"
-              , Group
-                    [ ( "RTVE Radio Nacional", Url "https://rne.rtveradio.cires21.com/rne_hc.mp3" )
-                    ]
-              )
-            ]
-      )
-    ]
+        , Youtube "YouTube" Nothing
+        , Settings
+            [ PowerOff "Uitzetten" ]
+        ]
