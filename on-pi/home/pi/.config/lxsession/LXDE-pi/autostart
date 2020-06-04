@@ -1,0 +1,4 @@
+@xset s off
+@xset -dpms
+@xset s noblank
+@chromium-browser --kiosk file:///home/pi/Public/index.html --check-for-update-interval=1 --simulate-critical-update  --noerrdialogs --disable-crash-report --disable-infobars
