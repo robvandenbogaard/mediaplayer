@@ -28,7 +28,7 @@ type Entry
     | Radio String String
     | Youtube String (Maybe String)
     | Settings (List Entry)
-    | PowerOff String
+    | PowerOff String String
 
 
 type Msg
@@ -92,7 +92,7 @@ namedEntry e =
         Youtube k _ ->
             Just ( k, e )
 
-        PowerOff k ->
+        PowerOff k _ ->
             Just ( k, e )
 
         _ ->
@@ -296,15 +296,15 @@ content model =
             let
                 entry e =
                     case e of
-                        Just ( n, _ ) ->
-                            [ link n (n :: model.route), br [] [] ]
+                        PowerOff label url ->
+                            [ a [ href url ] [ text label ] ]
 
-                        Nothing ->
+                        _ ->
                             []
             in
             nav
                 []
-                (List.concatMap (entry << namedEntry) entries)
+                (List.concatMap entry entries)
 
         Radio name url ->
             article
@@ -336,7 +336,7 @@ content model =
                             ]
                         |> Embed.Youtube.toHtml
 
-        PowerOff _ ->
+        PowerOff _ _ ->
             article
                 []
                 [ text "-"
@@ -413,5 +413,5 @@ menu =
             ]
         , Youtube "YouTube" Nothing
         , Settings
-            [ PowerOff "Uitzetten" ]
+            [ PowerOff "Uitzetten" "/poweroff" ]
         ]
